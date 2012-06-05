@@ -1,8 +1,8 @@
 # check_yum_last_update
 
-This is a nagios plugin to check how long it has been since `yum update` was last run. It should be installed on each server you want to check and accessed via NRPE.
+This is a nagios plugin to check how long it has been since `apt-get upgrade` was last run. It should be installed on each server you want to check and accessed via NRPE.
 
-Usage: check_yum_last_update [options]
+Usage: check_apt_last_update [options]
 
 Options:
 
@@ -25,9 +25,9 @@ Options:
 
 To configure it for NRPE you need a line like the below in your `nrpe.cfg`
 
-    command[check_yum_last_update]=/usr/bin/sudo /usr/local/lib/nagios/plugins/check_yum_last_update -w 45 -c 75
+    command[check_apt_last_update]=/usr/bin/sudo /usr/local/lib/nagios/plugins/check_apt_last_update -w 45 -c 75
 
 ## How it works
 
-It looks for the last line with "Updated:" in `/var/log/yum.log` (and it will also check `/var/log/yum.log.1` etc.) It then parses the date at the start of the line and works out how long ago the update was.
+It looks in `/var/log/apt/history.log` (or `history.log.1.gz` etc.) for the last line that starts with `Upgrade:` and then finds the following line that starts with `End-Date:`, parses the date on that line and then works out how long ago the update was.
 
