@@ -4,7 +4,7 @@
 # shamelessly based on check_yum
 
 __author__  = "Hamish Downer"
-__title__   = "Nagios Plugin for checking days since last Yum update on RedHat/CentOS systems"
+__title__   = "Nagios Plugin for checking days since last Apt upgrade on Debian/Ubuntu systems"
 __version__ = "0.0.1"
 
 
@@ -24,27 +24,11 @@ DEFAULT_TIMEOUT = 30
 DEFAULT_WARNING = 60
 DEFAULT_CRITICAL = 90
 
-# python 2.4 datetime does not have the strptime() method
-month_to_num = {
-        'Jan': 1,
-        'Feb': 2,
-        'Mar': 3,
-        'Apr': 4,
-        'May': 5,
-        'Jun': 6,
-        'Jul': 7,
-        'Aug': 8,
-        'Sep': 9,
-        'Oct': 10,
-        'Nov': 11,
-        'Dec': 12,
-        }
-
 def end(status, message):
     """Exits the plugin with first arg as the return code and the second
     arg as the message to output"""
     
-    check = "YUM "
+    check = "APT "
     if status == OK:
         print "%sOK: %s" % (check, message)
         sys.exit(OK)
@@ -59,21 +43,21 @@ def end(status, message):
         sys.exit(UNKNOWN)
 
 
-YUM = "/usr/bin/yum"
+APT = "/usr/bin/apt-get"
 
-def check_yum_usable():
-    """Checks that the YUM program and path are correct and usable - that
+def check_apt_usable():
+    """Checks that the APT program and path are correct and usable - that
     the program exists and is executable, otherwise exits with error"""
 
-    if not os.path.exists(YUM):
-        end(UNKNOWN, "%s cannot be found" % YUM)
-    elif not os.path.isfile(YUM):
-        end(UNKNOWN, "%s is not a file" % YUM)
-    elif not os.access(YUM, os.X_OK):
-        end(UNKNOWN, "%s is not executable" % YUM)
+    if not os.path.exists(APT):
+        end(UNKNOWN, "%s cannot be found" % APT)
+    elif not os.path.isfile(APT):
+        end(UNKNOWN, "%s is not a file" % APT)
+    elif not os.access(APT, os.X_OK):
+        end(UNKNOWN, "%s is not executable" % APT)
 
 
-class YumUpdateChecker(object):
+class AptUpdateChecker(object):
     def __init__(self):
         """Initialize all object variables"""
 
@@ -154,7 +138,7 @@ class YumUpdateChecker(object):
         discarded = discarded2
         discarded2 = discarded
 
-        end(CRITICAL, "Yum nagios plugin has self terminated after " \
+        end(CRITICAL, "Apt nagios plugin has self terminated after " \
                     + "exceeding the timeout (%s seconds)" % self.timeout)
 
 
@@ -164,18 +148,15 @@ class YumUpdateChecker(object):
         if self.verbosity >= threshold:
             print "%s" % message
 
-    def convert_to_past_date(self, date_str):
-        """Expect string of form "Mar 12" or "Aug 03" and make it
-        either this year, or if this year would be in the future, make
-        it last year."""
-        year = date.today().year
-        month = month_to_num[date_str[:3]]
-        day = int(date_str[4:])
+    def gziplines(self, fname):
+        # from http://spyced.blogspot.com/2006/12/wow-gzip-module-kinda-sucks.html
+        from subprocess import Popen, PIPE
+        f = Popen(['zcat', fname], stdout=PIPE)
+        return f.stdout
 
-        past_date = date(year, month, day)
-        if past_date > date.today():
-            past_date = date(year-1, month, day)
-        return past_date
+    def convert_to_past_date(self, date_str):
+        year,month,day = date_str.split('-')
+        return date(int(year), int(month), int(day))
 
     def find_last_updated_date(self, logfile):
         if not os.path.exists(logfile):
@@ -185,21 +166,29 @@ class YumUpdateChecker(object):
             self.vprint(1, 'log file %s has zero length' % logfile)
             return None
         last_date = None
-        for line in open(logfile):
-            if 'Updated:' in line:
-                # might want to exclude some packages
-                use_line = True
-                for exclude in self.exclude_list:
-                    if exclude in line:
-                        use_line = False
-                if use_line:
-                    # date is first 6 characters of line
-                    last_date = line[:6]
+        if logfile.endswith('.gz'):
+            f = self.gziplines(logfile)
+        else:
+            f = open(logfile)
+        try:
+            search_for = 'Upgrade'
+            while True:
+                line = f.next()
+                if search_for == 'Upgrade':
+                    if line.startswith('Upgrade:'):
+                        search_for = 'End-Date'
+                else:
+                    # expecting a line like:
+                    # End-Date: 2012-05-31  15:01:25
+                    if line.startswith('End-Date:'):
+                        last_date = line.split()[1]
+                        search_for = 'Upgrade'
+        except StopIteration:
+            pass
         if last_date == None:
             self.vprint(1, 'no lines with "Updated:" found in %s' % logfile)
             return None
         # convert date string to actual date
-        # should be of form 'Mar 23', 'Jan 04' etc
         self.vprint(3, 'Date found is %s' % last_date)
         return self.convert_to_past_date(last_date)
 
@@ -207,33 +196,33 @@ class YumUpdateChecker(object):
         datediff = date.today() - date
         return datediff.days
 
-    def check_last_yum_update(self):
-        check_yum_usable()
+    def check_last_apt_update(self):
+        check_apt_usable()
         self.vprint(3, "%s - Version %s\nAuthor: %s\n" \
             % (__title__, __version__, __author__))
         
         self.validate_all_variables()
         self.set_timeout()
 
-        # search for updated in yum.log, or if not found, in yum.log.1
-        logdir = '/var/log'
-        yum_logs = sorted([f for f in os.listdir(logdir) if f.startswith('yum.log')])
+        # search for Upgrade: in history.log, or if not found, in history.log.1.gz
+        logdir = '/var/log/apt'
+        apt_logs = sorted([f for f in os.listdir(logdir) if f.startswith('history.log')])
         last_update = None
-        for logfile in yum_logs:
+        for logfile in apt_logs:
             last_update = self.find_last_updated_date(os.path.join(logdir, logfile))
             if last_update:
                 break
 
         if last_update == None:
-            # yum never run
+            # apt never run
             status = CRITICAL
-            message = 'No yum log files found, yum probably never run'
+            message = 'No apt log files found, apt probably never run'
         else:
             days_since_update = self.calc_days_ago(last_update)
             if days_since_update == 1:
-                message = '1 day since last yum update'
+                message = '1 day since last apt update'
             else:
-                message = '%d days since last yum update' % days_since_update
+                message = '%d days since last apt update' % days_since_update
 
             if days_since_update < self.warning:
                 status = OK
@@ -248,7 +237,7 @@ class YumUpdateChecker(object):
 def main():
     """Parses command line options and calls the test function"""
 
-    update_checker = YumUpdateChecker()
+    update_checker = AptUpdateChecker()
     parser = OptionParser()
 
     parser.add_option( "-w", 
@@ -308,7 +297,7 @@ def main():
             % (__title__, __version__, __author__)
         sys.exit(OK)
     
-    result, output = update_checker.check_last_yum_update()
+    result, output = update_checker.check_last_apt_update()
     end(result, output)
 
 if __name__ == "__main__":
